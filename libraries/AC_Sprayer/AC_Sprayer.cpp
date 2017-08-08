@@ -85,7 +85,7 @@ void AC_Sprayer::run(const bool true_false)
 
 void AC_Sprayer::stop_spraying()
 {
-    SRV_Channels::set_output_limit(SRV_Channel::k_sprayer_pump, SRV_Channel::SRV_CHANNEL_LIMIT_MIN);
+    //SRV_Channels::set_output_limit(SRV_Channel::k_sprayer_pump, SRV_Channel::SRV_CHANNEL_LIMIT_MIN);
     SRV_Channels::set_output_limit(SRV_Channel::k_sprayer_spinner, SRV_Channel::SRV_CHANNEL_LIMIT_MIN);
 
     _flags.spraying = false;
@@ -95,12 +95,13 @@ void AC_Sprayer::stop_spraying()
 void
 AC_Sprayer::update()
 {
+
     // exit immediately if we are disabled or shouldn't be running
     if (!_enabled || !running()) {
         run(false);
         return;
     }
-
+    /*
     // exit immediately if the pump function has not been set-up for any servo
     if (!SRV_Channels::function_assigned(SRV_Channel::k_sprayer_pump)) {
         return;
@@ -160,10 +161,10 @@ AC_Sprayer::update()
         float pos = ground_speed * _pump_pct_1ms;
         pos = MAX(pos, 100 *_pump_min_pct); // ensure min pump speed
         pos = MIN(pos,10000); // clamp to range
-        SRV_Channels::move_servo(SRV_Channel::k_sprayer_pump, pos, 0, 10000);
+        SRV_Channels::move_servo(SRV_Channel::k_sprayer_pump, 9000, 0, 18000);
         SRV_Channels::set_output_pwm(SRV_Channel::k_sprayer_spinner, _spinner_pwm);
         _flags.spraying = true;
     }else{
         stop_spraying();
-    }
+    } */
 }

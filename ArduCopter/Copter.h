@@ -133,7 +133,6 @@
 #include <SITL/SITL.h>
 #endif
 
-
 class Copter : public AP_HAL::HAL::Callbacks {
 public:
     friend class GCS_MAVLINK_Copter;
