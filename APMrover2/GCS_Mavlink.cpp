@@ -1,7 +1,8 @@
 #include "Rover.h"
-#include "version.h"
 
 #include "GCS_Mavlink.h"
+
+#include <AP_RangeFinder/RangeFinder_Backend.h>
 
 void Rover::send_heartbeat(mavlink_channel_t chan)
 {
@@ -119,7 +120,7 @@ void Rover::send_location(mavlink_channel_t chan)
         current_loc.lat,                    // in 1E7 degrees
         current_loc.lng,                    // in 1E7 degrees
         current_loc.alt * 10UL,             // millimeters above sea level
-        (current_loc.alt - home.alt) * 10,  // millimeters above ground
+        (current_loc.alt - home.alt) * 10,  // millimeters above home
         vel.x * 100,   // X speed cm/s (+ve North)
         vel.y * 100,   // Y speed cm/s (+ve East)
         vel.z * -100,  // Z speed cm/s (+ve up)
@@ -134,9 +135,9 @@ void Rover::send_nav_controller_output(mavlink_channel_t chan)
         ahrs.groundspeed() * ins.get_gyro().z,  // use nav_pitch to hold actual Y accel
         nav_controller->nav_bearing_cd() * 0.01f,
         nav_controller->target_bearing_cd() * 0.01f,
-        MIN(wp_distance, UINT16_MAX),
+        MIN(control_mode->get_distance_to_destination(), UINT16_MAX),
         0,
-        groundspeed_error,
+        control_mode->speed_error(),
         nav_controller->crosstrack_error());
 }
 
@@ -184,35 +185,26 @@ void Rover::send_simstate(mavlink_channel_t chan)
 
 void Rover::send_rangefinder(mavlink_channel_t chan)
 {
-    if (!rangefinder.has_data(0) && !rangefinder.has_data(1)) {
-        // no rangefinder to report
-        return;
+    float distance_cm;
+    float voltage;
+    bool got_one = false;
+
+    // report smaller distance of all rangefinders
+    for (uint8_t i=0; i<rangefinder.num_sensors(); i++) {
+        AP_RangeFinder_Backend *s = rangefinder.get_backend(i);
+        if (s == nullptr) {
+            continue;
+        }
+        if (!got_one ||
+            s->distance_cm() < distance_cm) {
+            distance_cm = s->distance_cm();
+            voltage = s->voltage_mv();
+            got_one = true;
+        }
     }
-
-    float distance_cm = 0.0f;
-    float voltage = 0.0f;
-
-    /*
-      report smaller distance of two rangefinders
-     */
-    if (rangefinder.has_data(0) && rangefinder.has_data(1)) {
-        if (rangefinder.distance_cm(0) <= rangefinder.distance_cm(1)) {
-            distance_cm = rangefinder.distance_cm(0);
-            voltage = rangefinder.voltage_mv(0);
-        } else {
-            distance_cm = rangefinder.distance_cm(1);
-            voltage = rangefinder.voltage_mv(1);
-        }
-    } else {
-        // only rangefinder 0 or rangefinder 1 has data
-        if (rangefinder.has_data(0)) {
-            distance_cm = rangefinder.distance_cm(0);
-            voltage = rangefinder.voltage_mv(0) * 0.001f;
-        }
-        if (rangefinder.has_data(1)) {
-            distance_cm = rangefinder.distance_cm(1);
-            voltage = rangefinder.voltage_mv(1) * 0.001f;
-        }
+    if (!got_one) {
+        // no relevant data found
+        return;
     }
 
     mavlink_msg_rangefinder_send(
@@ -229,7 +221,7 @@ void Rover::send_pid_tuning(mavlink_channel_t chan)
     const Vector3f &gyro = ahrs.get_gyro();
     const DataFlash_Class::PID_Info *pid_info;
     if (g.gcs_pid_mask & 1) {
-        pid_info = &steerController.get_pid_info();
+        pid_info = &g2.attitude_control.get_steering_rate_pid().get_pid_info();
         mavlink_msg_pid_tuning_send(chan, PID_TUNING_STEER,
                                     pid_info->desired,
                                     degrees(gyro.z),
@@ -242,7 +234,7 @@ void Rover::send_pid_tuning(mavlink_channel_t chan)
         }
     }
     if (g.gcs_pid_mask & 2) {
-        pid_info = &g.pidSpeedThrottle.get_pid_info();
+        pid_info = &g2.attitude_control.get_throttle_speed_pid().get_pid_info();
         mavlink_msg_pid_tuning_send(chan, PID_TUNING_ACCZ,
                                     pid_info->desired,
                                     0,
@@ -285,7 +277,7 @@ bool GCS_MAVLINK_Rover::try_send_message(enum ap_message id)
     // wants to fire then don't send a mavlink message. We want to
     // prioritise the main flight control loop over communications
     if (!rover.in_mavlink_delay && rover.scheduler.time_available_usec() < 1200) {
-        rover.gcs_out_of_time = true;
+        gcs().set_out_of_time(true);
         return false;
     }
 
@@ -305,11 +297,6 @@ bool GCS_MAVLINK_Rover::try_send_message(enum ap_message id)
             CHECK_PAYLOAD_SIZE(POWER_STATUS);
             send_power_status();
         }
-        break;
-
-    case MSG_EXTENDED_STATUS2:
-        CHECK_PAYLOAD_SIZE(MEMINFO);
-        send_meminfo();
         break;
 
     case MSG_ATTITUDE:
@@ -332,16 +319,6 @@ bool GCS_MAVLINK_Rover::try_send_message(enum ap_message id)
             CHECK_PAYLOAD_SIZE(NAV_CONTROLLER_OUTPUT);
             rover.send_nav_controller_output(chan);
         }
-        break;
-
-    case MSG_GPS_RAW:
-        CHECK_PAYLOAD_SIZE(GPS_RAW_INT);
-        send_gps_raw(rover.gps);
-        break;
-
-    case MSG_SYSTEM_TIME:
-        CHECK_PAYLOAD_SIZE(SYSTEM_TIME);
-        send_system_time(rover.gps);
         break;
 
     case MSG_SERVO_OUT:
@@ -410,13 +387,6 @@ bool GCS_MAVLINK_Rover::try_send_message(enum ap_message id)
     case MSG_BATTERY2:
         CHECK_PAYLOAD_SIZE(BATTERY2);
         send_battery2(rover.battery);
-        break;
-
-    case MSG_CAMERA_FEEDBACK:
-#if CAMERA == ENABLED
-        CHECK_PAYLOAD_SIZE(CAMERA_FEEDBACK);
-        rover.camera.send_feedback(chan);
-#endif
         break;
 
     case MSG_EKF_STATUS_REPORT:
@@ -531,7 +501,7 @@ const AP_Param::GroupInfo GCS_MAVLINK::var_info[] = {
 void
 GCS_MAVLINK_Rover::data_stream_send(void)
 {
-    rover.gcs_out_of_time = false;
+    gcs().set_out_of_time(false);
 
     if (!rover.in_mavlink_delay) {
         rover.DataFlash.handle_log_send(*this);
@@ -539,7 +509,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
 
     send_queued_parameters();
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -559,7 +529,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         return;
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -568,7 +538,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         send_message(MSG_RAW_IMU3);
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -576,11 +546,14 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         send_message(MSG_EXTENDED_STATUS1);
         send_message(MSG_EXTENDED_STATUS2);
         send_message(MSG_CURRENT_WAYPOINT);
-        send_message(MSG_GPS_RAW);            // TODO - remove this message after location message is working
+        send_message(MSG_GPS_RAW);
+        send_message(MSG_GPS_RTK);
+        send_message(MSG_GPS2_RAW);
+        send_message(MSG_GPS2_RTK);
         send_message(MSG_NAV_CONTROLLER_OUTPUT);
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -590,7 +563,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         send_message(MSG_LOCAL_POSITION);
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -598,7 +571,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         send_message(MSG_SERVO_OUT);
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -607,7 +580,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         send_message(MSG_RADIO_IN);
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -619,7 +592,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         }
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -627,7 +600,7 @@ GCS_MAVLINK_Rover::data_stream_send(void)
         send_message(MSG_VFR_HUD);
     }
 
-    if (rover.gcs_out_of_time) {
+    if (gcs().out_of_time()) {
       return;
     }
 
@@ -657,7 +630,7 @@ bool GCS_MAVLINK_Rover::handle_guided_request(AP_Mission::Mission_Command &cmd)
     }
 
     // make any new wp uploaded instant (in case we are already in Guided mode)
-    rover.set_guided_WP(cmd.content.location);
+    rover.mode_guided.set_desired_location(cmd.content.location);
     return true;
 }
 
@@ -669,6 +642,7 @@ void GCS_MAVLINK_Rover::handle_change_alt_request(AP_Mission::Mission_Command &c
 void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
 {
     switch (msg->msgid) {
+
     case MAVLINK_MSG_ID_REQUEST_DATA_STREAM:
         {
             handle_request_data_stream(msg, true);
@@ -682,6 +656,50 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
         uint8_t result = MAV_RESULT_UNSUPPORTED;
 
         switch (packet.command) {
+
+        case MAV_CMD_DO_SET_HOME: {
+            // assume failure
+            result = MAV_RESULT_FAILED;
+            if (is_equal(packet.param1, 1.0f)) {
+                // if param1 is 1, use current location
+                if (rover.set_home_to_current_location(true)) {
+                    result = MAV_RESULT_ACCEPTED;
+                }
+                break;
+            }
+            // ensure param1 is zero
+            if (!is_zero(packet.param1)) {
+                break;
+            }
+            // check frame type is supported
+            if (packet.frame != MAV_FRAME_GLOBAL &&
+                packet.frame != MAV_FRAME_GLOBAL_INT &&
+                packet.frame != MAV_FRAME_GLOBAL_RELATIVE_ALT &&
+                packet.frame != MAV_FRAME_GLOBAL_RELATIVE_ALT_INT) {
+                break;
+            }
+            // sanity check location
+            if (!check_latlng(packet.x, packet.y)) {
+                break;
+            }
+            Location new_home_loc {};
+            new_home_loc.lat = packet.x;
+            new_home_loc.lng = packet.y;
+            new_home_loc.alt = packet.z * 100;
+            // handle relative altitude
+            if (packet.frame == MAV_FRAME_GLOBAL_RELATIVE_ALT || packet.frame == MAV_FRAME_GLOBAL_RELATIVE_ALT_INT) {
+                if (rover.home_is_set == HOME_UNSET) {
+                    // cannot use relative altitude if home is not set
+                    break;
+                }
+                new_home_loc.alt += rover.ahrs.get_home().alt;
+            }
+            if (rover.set_home(new_home_loc, true)) {
+                result = MAV_RESULT_ACCEPTED;
+            }
+            break;
+        }
+
 #if MOUNT == ENABLED
         case MAV_CMD_DO_SET_ROI: {
             // param1 : /* Region of interest mode (not used)*/
@@ -825,31 +843,6 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
                 }
                 break;
 
-        case MAV_CMD_DO_SET_MODE:
-            switch (static_cast<uint16_t>(packet.param1)) {
-            case MAV_MODE_MANUAL_ARMED:
-            case MAV_MODE_MANUAL_DISARMED:
-                rover.set_mode(rover.mode_manual, MODE_REASON_GCS_COMMAND);
-                result = MAV_RESULT_ACCEPTED;
-                break;
-
-            case MAV_MODE_AUTO_ARMED:
-            case MAV_MODE_AUTO_DISARMED:
-                rover.set_mode(rover.mode_auto, MODE_REASON_GCS_COMMAND);
-                result = MAV_RESULT_ACCEPTED;
-                break;
-
-            case MAV_MODE_STABILIZE_DISARMED:
-            case MAV_MODE_STABILIZE_ARMED:
-                rover.set_mode(rover.mode_learning, MODE_REASON_GCS_COMMAND);
-                result = MAV_RESULT_ACCEPTED;
-                break;
-
-            default:
-                result = MAV_RESULT_UNSUPPORTED;
-            }
-            break;
-
         case MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN:
             if (is_equal(packet.param1, 1.0f) || is_equal(packet.param1, 3.0f)) {
                 // when packet.param1 == 3 we reboot to hold in bootloader
@@ -880,19 +873,15 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
         case MAV_CMD_GET_HOME_POSITION:
             if (rover.home_is_set != HOME_UNSET) {
                 send_home(rover.ahrs.get_home());
+                Location ekf_origin;
+                if (rover.ahrs.get_origin(ekf_origin)) {
+                    send_ekf_origin(ekf_origin);
+                }
                 result = MAV_RESULT_ACCEPTED;
             } else {
                 result = MAV_RESULT_FAILED;
             }
             break;
-
-        case MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES: {
-            if (is_equal(packet.param1, 1.0f)) {
-                send_autopilot_version(FIRMWARE_VERSION);
-                result = MAV_RESULT_ACCEPTED;
-            }
-            break;
-        }
 
         case MAV_CMD_DO_SET_HOME:
         {
@@ -906,6 +895,10 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
                     result = MAV_RESULT_ACCEPTED;
                 }
             } else {
+                // ensure param1 is zero
+                if (!is_zero(packet.param1)) {
+                    break;
+                }
                 Location new_home_loc {};
                 new_home_loc.lat = static_cast<int32_t>(packet.param5 * 1.0e7f);
                 new_home_loc.lng = static_cast<int32_t>(packet.param6 * 1.0e7f);
@@ -927,11 +920,9 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
                 break;
             }
 
-            rover.mode_guided.guided_mode = ModeGuided::Guided_Angle;
-            rover.guided_control.msg_time_ms = AP_HAL::millis();
-            rover.guided_control.turn_angle = packet.param1;
-            rover.guided_control.target_speed = constrain_float(packet.param2, 0.0f, 1.0f);
-            rover.nav_set_yaw_speed();
+            // send yaw change and target speed to guided mode controller
+            float target_speed = constrain_float(packet.param2 * rover.g.speed_cruise, -rover.g.speed_cruise, rover.g.speed_cruise);
+            rover.mode_guided.set_desired_heading_delta_and_speed(packet.param1, target_speed);
             result = MAV_RESULT_ACCEPTED;
             break;
         }
@@ -968,30 +959,6 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
 
             break;
         }
-
-    case MAVLINK_MSG_ID_SET_MODE:
-        {
-            handle_set_mode(msg, FUNCTOR_BIND(&rover, &Rover::mavlink_set_mode, bool, uint8_t));
-            break;
-        }
-
-    case MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
-        {
-            // mark the firmware version in the tlog
-            send_text(MAV_SEVERITY_INFO, FIRMWARE_STRING);
-
-#if defined(PX4_GIT_VERSION) && defined(NUTTX_GIT_VERSION)
-            send_text(MAV_SEVERITY_INFO, "PX4: " PX4_GIT_VERSION " NuttX: " NUTTX_GIT_VERSION);
-#endif
-            handle_param_request_list(msg);
-            break;
-        }
-
-    case MAVLINK_MSG_ID_PARAM_SET:
-    {
-        handle_param_set(msg, &rover.DataFlash);
-        break;
-    }
 
     case MAVLINK_MSG_ID_RC_CHANNELS_OVERRIDE:
     {
@@ -1044,8 +1011,6 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
             if (rover.control_mode != &rover.mode_guided) {
                 break;
             }
-            // record the time when the last message arrived
-            rover.guided_control.msg_time_ms = AP_HAL::millis();
 
             // ensure type_mask specifies to use thrust
             if ((packet.type_mask & MAVLINK_SET_ATT_TYPE_MASK_THROTTLE_IGNORE) != 0) {
@@ -1053,24 +1018,17 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
             }
 
             // convert thrust to ground speed
-            packet.thrust = constrain_float(packet.thrust, 0.0f, 1.0f);
-            float target_speed = 0.0f;
-            if (is_equal(packet.thrust, 0.5f)) {
-                target_speed = 0.0f;
-            } else if (packet.thrust > 0.5f) {
-                target_speed = (packet.thrust - 0.5f) * 2.0f * rover.g.speed_cruise;
-            } else {
-                target_speed = (0.5f - packet.thrust) * 2.0f * rover.g.speed_cruise;
-            }
+            packet.thrust = constrain_float(packet.thrust, -1.0f, 1.0f);
+            float target_speed = rover.g.speed_cruise * packet.thrust;
 
-            // if the body_yaw_rate field is ignored, use the commanded yaw position
-            // otherwise use the commanded yaw rate
+            // if the body_yaw_rate field is ignored, convert quaternion to heading
             if ((packet.type_mask & MAVLINK_SET_ATT_TYPE_MASK_YAW_RATE_IGNORE) != 0) {
                 // convert quaternion to heading
-                // int32_t target_heading_cd = static_cast<int32_t>(degrees(Quaternion(packet.q[0], packet.q[1], packet.q[2], packet.q[3]).get_euler_yaw()) * 100);
-                // TODO : handle that
+                float target_heading_cd = degrees(Quaternion(packet.q[0], packet.q[1], packet.q[2], packet.q[3]).get_euler_yaw()) * 100.0f;
+                rover.mode_guided.set_desired_heading_and_speed(target_heading_cd, target_speed);
             } else {
-                rover.set_guided_velocity((RAD_TO_DEG * packet.body_yaw_rate), target_speed);
+                // use body_yaw_rate field
+                rover.mode_guided.set_desired_turn_rate_and_speed((RAD_TO_DEG * packet.body_yaw_rate) * 100.0f, target_speed);
             }
             break;
         }
@@ -1097,11 +1055,10 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
             bool pos_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_POS_IGNORE;
             bool vel_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_VEL_IGNORE;
             bool acc_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_ACC_IGNORE;
+            bool yaw_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_YAW_IGNORE;
+            bool yaw_rate_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_YAW_RATE_IGNORE;
 
-            // record the time when the last message arrived
-            rover.guided_control.msg_time_ms = AP_HAL::millis();
-
-            // prepare and send target position
+            // prepare target position
             Location target_loc = rover.current_loc;
             if (!pos_ignore) {
                 switch (packet.coordinate_frame) {
@@ -1127,35 +1084,49 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
                     break;
                 }
             }
+
             float target_speed = 0.0f;
-            float target_steer_speed = 0.0f;
+            float target_yaw_cd = 0.0f;
+
+            // consume velocity and convert to target speed and heading
             if (!vel_ignore) {
-                // use packet vy (forward in NED) for speed in m/s and packet yaw_rate for turn in rad/s
-                float velx = packet.vx;
-                float vely = packet.vy;
-                // rotate to body-frame if necessary
+                // convert vector length into a speed
+                target_speed = constrain_float(safe_sqrt(sq(packet.vx) + sq(packet.vy)), -rover.g.speed_cruise, rover.g.speed_cruise);
+                // convert vector direction to target yaw
+                target_yaw_cd = degrees(atan2f(packet.vy, packet.vx)) * 100.0f;
+                // rotate target yaw if provided in body-frame
                 if (packet.coordinate_frame == MAV_FRAME_BODY_NED || packet.coordinate_frame == MAV_FRAME_BODY_OFFSET_NED) {
-                    // rotate from body-frame to NE frame
-                    velx = velx * rover.ahrs.cos_yaw() - vely * rover.ahrs.sin_yaw();
-                    vely = velx * rover.ahrs.sin_yaw() + vely * rover.ahrs.cos_yaw();
+                    target_yaw_cd = wrap_180_cd(target_yaw_cd + rover.ahrs.yaw_sensor);
                 }
-                target_speed = vely;
-                target_steer_speed = RAD_TO_DEG * packet.yaw_rate;
-                // TODO : take into account reverse speed
-                // TODO : handle yaw heading cmd
             }
 
-            if (!pos_ignore && !vel_ignore && acc_ignore) {
-                rover.set_guided_WP(target_loc);
-                if (!is_zero(target_speed)) {
-                    rover.guided_control.target_speed = target_speed;
+            float target_turn_rate_cds = 0.0f;
+
+            // consume yaw heading and yaw rate
+            if (!yaw_ignore) {
+                target_yaw_cd = ToDeg(packet.yaw) * 100.0f;
+                // rotate target yaw if provided in body-frame
+                if (packet.coordinate_frame == MAV_FRAME_BODY_NED || packet.coordinate_frame == MAV_FRAME_BODY_OFFSET_NED) {
+                    target_yaw_cd = wrap_180_cd(target_yaw_cd + rover.ahrs.yaw_sensor);
                 }
-            } else if (pos_ignore && !vel_ignore && acc_ignore) {
-                rover.set_guided_velocity(target_steer_speed, target_speed);
-            } else if (!pos_ignore && vel_ignore && acc_ignore) {
-                rover.set_guided_WP(target_loc);
-            } else {
-                // result = MAV_RESULT_FAILED;  // TODO : support that
+            }
+            if (!yaw_rate_ignore) {
+                target_turn_rate_cds = ToDeg(packet.yaw_rate) * 100.0f;
+            }
+
+            // set guided mode targets
+            if (!pos_ignore && vel_ignore && acc_ignore && yaw_ignore && yaw_rate_ignore) {
+                // consume position target
+                rover.mode_guided.set_desired_location(target_loc);
+            } else if (pos_ignore && !vel_ignore && acc_ignore && yaw_ignore && yaw_rate_ignore) {
+                // consume velocity
+                rover.mode_guided.set_desired_heading_and_speed(target_yaw_cd, target_speed);
+            } else if (pos_ignore && vel_ignore && acc_ignore && !yaw_ignore && yaw_rate_ignore) {
+                // consume just target heading (probably only skid steering vehicles can do this)
+                rover.mode_guided.set_desired_heading_and_speed(target_yaw_cd, 0.0f);
+            } else if (pos_ignore && vel_ignore && acc_ignore && yaw_ignore && !yaw_rate_ignore) {
+                // consume just turn rate(probably only skid steering vehicles can do this)
+                rover.mode_guided.set_desired_turn_rate_and_speed(target_turn_rate_cds, 0.0f);
             }
             break;
         }
@@ -1171,20 +1142,21 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
                 break;
             }
             // check for supported coordinate frames
-            if (packet.coordinate_frame != MAV_FRAME_GLOBAL_INT &&
+            if (packet.coordinate_frame != MAV_FRAME_GLOBAL &&
+                packet.coordinate_frame != MAV_FRAME_GLOBAL_INT &&
                 packet.coordinate_frame != MAV_FRAME_GLOBAL_RELATIVE_ALT &&
                 packet.coordinate_frame != MAV_FRAME_GLOBAL_RELATIVE_ALT_INT &&
+                packet.coordinate_frame != MAV_FRAME_GLOBAL_TERRAIN_ALT &&
                 packet.coordinate_frame != MAV_FRAME_GLOBAL_TERRAIN_ALT_INT) {
                 break;
             }
             bool pos_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_POS_IGNORE;
             bool vel_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_VEL_IGNORE;
             bool acc_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_ACC_IGNORE;
+            bool yaw_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_YAW_IGNORE;
+            bool yaw_rate_ignore = packet.type_mask & MAVLINK_SET_POS_TYPE_MASK_YAW_RATE_IGNORE;
 
-            // record the time where the last message arrived
-            rover.guided_control.msg_time_ms = AP_HAL::millis();
-
-            // prepare and send target position
+            // prepare target position
             Location target_loc = rover.current_loc;
             if (!pos_ignore) {
                 // sanity check location
@@ -1195,27 +1167,45 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
                 target_loc.lat = packet.lat_int;
                 target_loc.lng = packet.lon_int;
             }
+
             float target_speed = 0.0f;
-            float target_steer_speed = 0.0f;
+            float target_yaw_cd = 0.0f;
+
+            // consume velocity and convert to target speed and heading
             if (!vel_ignore) {
-                // use packet vy (forward in NED) for speed in m/s and packet yaw_rate for turn in rad/s
-                target_speed = packet.vy;
-                target_steer_speed = RAD_TO_DEG * packet.yaw_rate;
-                // TODO : take into account reverse speed
-                // TODO : handle yaw heading cmd
+                // convert vector length into a speed
+                target_speed = constrain_float(safe_sqrt(sq(packet.vx) + sq(packet.vy)), -rover.g.speed_cruise, rover.g.speed_cruise);
+                // convert vector direction to target yaw
+                target_yaw_cd = degrees(atan2f(packet.vy, packet.vx)) * 100.0f;
             }
 
-            if (!pos_ignore && !vel_ignore && acc_ignore) {
-                rover.set_guided_WP(target_loc);
-                if (!is_zero(target_speed)) {
-                    rover.guided_control.target_speed = target_speed;
+            float target_turn_rate_cds = 0.0f;
+
+            // consume yaw heading and yaw rate
+            if (!yaw_ignore) {
+                target_yaw_cd = ToDeg(packet.yaw) * 100.0f;
+                // rotate target yaw if provided in body-frame
+                if (packet.coordinate_frame == MAV_FRAME_BODY_NED || packet.coordinate_frame == MAV_FRAME_BODY_OFFSET_NED) {
+                    target_yaw_cd = wrap_180_cd(target_yaw_cd + rover.ahrs.yaw_sensor);
                 }
-            } else if (pos_ignore && !vel_ignore && acc_ignore) {
-                rover.set_guided_velocity(target_steer_speed, target_speed);
-            } else if (!pos_ignore && vel_ignore && acc_ignore) {
-                rover.set_guided_WP(target_loc);
-            } else {
-                // result = MAV_RESULT_FAILED;  // TODO : support that
+            }
+            if (!yaw_rate_ignore) {
+                target_turn_rate_cds = ToDeg(packet.yaw_rate) * 100.0f;
+            }
+
+            // set guided mode targets
+            if (!pos_ignore && vel_ignore && acc_ignore && yaw_ignore && yaw_rate_ignore) {
+                // consume position target
+                rover.mode_guided.set_desired_location(target_loc);
+            } else if (pos_ignore && !vel_ignore && acc_ignore && yaw_ignore && yaw_rate_ignore) {
+                // consume velocity
+                rover.mode_guided.set_desired_heading_and_speed(target_yaw_cd, target_speed);
+            } else if (pos_ignore && vel_ignore && acc_ignore && !yaw_ignore && yaw_rate_ignore) {
+                // consume just target heading (probably only skid steering vehicles can do this)
+                rover.mode_guided.set_desired_heading_and_speed(target_yaw_cd, 0.0f);
+            } else if (pos_ignore && vel_ignore && acc_ignore && yaw_ignore && !yaw_rate_ignore) {
+                // consume just turn rate(probably only skid steering vehicles can do this)
+                rover.mode_guided.set_desired_turn_rate_and_speed(target_turn_rate_cds, 0.0f);
             }
             break;
         }
@@ -1287,26 +1277,8 @@ void GCS_MAVLINK_Rover::handleMessage(mavlink_message_t* msg)
             break;
         }
 
-    case MAVLINK_MSG_ID_SERIAL_CONTROL:
-        handle_serial_control(msg, rover.gps);
-        break;
-
     case MAVLINK_MSG_ID_DISTANCE_SENSOR:
         rover.rangefinder.handle_msg(msg);
-        break;
-
-    case MAVLINK_MSG_ID_AUTOPILOT_VERSION_REQUEST:
-        send_autopilot_version(FIRMWARE_VERSION);
-        break;
-
-    case MAVLINK_MSG_ID_LED_CONTROL:
-        // send message to Notify
-        AP_Notify::handle_led_control(msg);
-        break;
-
-    case MAVLINK_MSG_ID_PLAY_TUNE:
-        // send message to Notify
-        AP_Notify::handle_play_tune(msg);
         break;
 
     case MAVLINK_MSG_ID_VISION_POSITION_DELTA:
@@ -1379,8 +1351,7 @@ void Rover::gcs_update(void)
  */
 void Rover::gcs_retry_deferred(void)
 {
-    gcs().send_message(MSG_RETRY_DEFERRED);
-    gcs().service_statustext();
+    gcs().retry_deferred();
 }
 
 /*
@@ -1416,6 +1387,15 @@ AP_ServoRelayEvents *GCS_MAVLINK_Rover::get_servorelayevents() const
     return &rover.ServoRelayEvents;
 }
 
+AP_AdvancedFailsafe *GCS_MAVLINK_Rover::get_advanced_failsafe() const
+{
+#if ADVANCED_FAILSAFE == ENABLED
+    return &rover.g2.afs;
+#else
+    return nullptr;
+#endif
+}
+
 Compass *GCS_MAVLINK_Rover::get_compass() const
 {
     return &rover.compass;
@@ -1424,4 +1404,23 @@ Compass *GCS_MAVLINK_Rover::get_compass() const
 AP_Mission *GCS_MAVLINK_Rover::get_mission()
 {
     return &rover.mission;
+}
+
+bool GCS_MAVLINK_Rover::set_mode(const uint8_t mode)
+{
+    Mode *new_mode = rover.control_mode_from_num((enum mode)mode);
+    if (new_mode == nullptr) {
+        return false;
+    }
+    return rover.set_mode(*new_mode, MODE_REASON_GCS_COMMAND);
+}
+
+const AP_FWVersion &GCS_MAVLINK_Rover::get_fwver() const
+{
+    return rover.fwver;
+}
+
+void GCS_MAVLINK_Rover::set_ekf_origin(const Location& loc)
+{
+    rover.set_ekf_origin(loc);
 }

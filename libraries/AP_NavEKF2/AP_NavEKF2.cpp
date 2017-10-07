@@ -204,6 +204,7 @@ const AP_Param::GroupInfo NavEKF2::var_info[] = {
     // @Description: This parameter controls the primary height sensor used by the EKF. If the selected option cannot be used, it will default to Baro as the primary height source. Setting 0 will use the baro altitude at all times. Setting 1 uses the range finder and is only available in combination with optical flow navigation (EK2_GPS_TYPE = 3). Setting 2 uses GPS. Setting 3 uses the range beacon data. NOTE - the EK2_RNG_USE_HGT parameter can be used to switch to range-finder when close to the ground.
     // @Values: 0:Use Baro, 1:Use Range Finder, 2:Use GPS, 3:Use Range Beacon
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("ALT_SOURCE", 9, NavEKF2, _altSource, 0),
 
     // @Param: ALT_M_NSE
@@ -583,7 +584,8 @@ NavEKF2::NavEKF2(const AP_AHRS *ahrs, AP_Baro &baro, const RangeFinder &rng) :
     gndEffectBaroScaler(4.0f),      // scaler applied to the barometer observation variance when operating in ground effect
     gndGradientSigma(50),           // RMS terrain gradient percentage assumed by the terrain height estimation
     fusionTimeStep_ms(10),          // The minimum number of msec between covariance prediction and fusion operations
-    runCoreSelection(false)         // true when the default primary core has stabilised after startup and core selection can run
+    runCoreSelection(false),        // true when the default primary core has stabilised after startup and core selection can run
+    inhibitGpsVertVelUse(false)     // true when GPS vertical velocity use is prohibited
 {
     AP_Param::setup_object_defaults(this, var_info);
 }

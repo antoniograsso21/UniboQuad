@@ -6,7 +6,7 @@
 
 [![Build Travis](https://travis-ci.org/ArduPilot/ardupilot.svg?branch=master)](https://travis-ci.org/ArduPilot/ardupilot)
 
-[![Coverity Scan Build Status](https://scan.coverity.com/projects/5331/badge.svg)](https://scan.coverity.com/projects/diydrones-ardupilot)
+[![Coverity Scan Build Status](https://scan.coverity.com/projects/5331/badge.svg)](https://scan.coverity.com/projects/ardupilot-ardupilot)
 
 ## The ArduPilot project is made up of: ##
 
@@ -108,8 +108,6 @@ for reviewing patches on their specific area. See [CONTRIBUTING.md](.github/CONT
   - ***Board***: VRBrain
 - [Julien BERAUD](https://github.com/jberaud)
   - ***Board***: Bebop & Bebop 2
-- [Pritam Ghanghas](https://github.com/pritamghanghas)
-  - ***Board***: Raspilot
 - [Matt Lawrence](https://github.com/Pedals2Paddles)
   - ***Vehicle***: 3DR Solo & Solo based vehicles
 - [Gustavo José de Sousa](https://github.com/guludo)

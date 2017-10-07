@@ -104,7 +104,7 @@ const AP_Param::GroupInfo AP_ADSB::var_info[] = {
 
     // @Param: RF_SELECT
     // @DisplayName: Transceiver RF selection
-    // @Description: Transceiver RF selection for Rx enable and/or Tx enable.
+    // @Description: Transceiver RF selection for Rx enable and/or Tx enable. This only effects devices that can Tx and Rx. Rx-only devices override this to always be Rx-only.
     // @Values: 0:Disabled,1:Rx-Only,2:Tx-Only,3:Rx and Tx Enabled
     // @User: Advanced
     AP_GROUPINFO("RF_SELECT",   9, AP_ADSB, out_state.cfg.rfSelect, UAVIONIX_ADSB_OUT_RF_SELECT_RX_ENABLED),
@@ -462,8 +462,8 @@ void AP_ADSB::send_adsb_vehicle(const mavlink_channel_t chan)
 
 void AP_ADSB::send_dynamic_out(const mavlink_channel_t chan)
 {
-    AP_GPS gps = _ahrs.get_gps();
-    Vector3f gps_velocity = gps.velocity();
+    const AP_GPS &gps = _ahrs.get_gps();
+    const Vector3f &gps_velocity = gps.velocity();
 
     int32_t latitude = _my_loc.lat;
     int32_t longitude = _my_loc.lng;
@@ -506,7 +506,7 @@ void AP_ADSB::send_dynamic_out(const mavlink_channel_t chan)
     const uint64_t gps_time = gps.time_epoch_usec();
     const uint32_t utcTime = gps_time / 1000000ULL;
 
-    AP_Baro baro = _ahrs.get_baro();
+    const AP_Baro &baro = _ahrs.get_baro();
     int32_t altPres = INT_MAX;
     if (baro.healthy()) {
         // Altitude difference between 101325 (Pascals) and current pressure. Result in millimeters
@@ -578,7 +578,7 @@ uint32_t AP_ADSB::genICAO(const Location_Class &loc)
 {
     // gps_time is not seconds since UTC midnight, but it is an equivalent random number
     // TODO: use UTC time instead of GPS time
-    AP_GPS gps = _ahrs.get_gps();
+    const AP_GPS &gps = _ahrs.get_gps();
     const uint64_t gps_time = gps.time_epoch_usec();
 
     uint32_t timeSum = 0;

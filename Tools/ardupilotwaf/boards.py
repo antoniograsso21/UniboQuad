@@ -325,6 +325,16 @@ class zynq(linux):
             CONFIG_HAL_BOARD_SUBTYPE = 'HAL_BOARD_SUBTYPE_LINUX_ZYNQ',
         )
 
+class ocpoc_zynq(linux):
+    toolchain = 'arm-linux-gnueabihf'
+
+    def configure_env(self, cfg, env):
+        super(ocpoc_zynq, self).configure_env(cfg, env)
+
+        env.DEFINES.update(
+            CONFIG_HAL_BOARD_SUBTYPE = 'HAL_BOARD_SUBTYPE_LINUX_OCPOC_ZYNQ',
+        )
+
 class bbbmini(linux):
     toolchain = 'arm-linux-gnueabihf'
 
@@ -375,16 +385,6 @@ class disco(linux):
             CONFIG_HAL_BOARD_SUBTYPE = 'HAL_BOARD_SUBTYPE_LINUX_DISCO',
         )
 
-class raspilot(linux):
-    toolchain = 'arm-linux-gnueabihf'
-
-    def configure_env(self, cfg, env):
-        super(raspilot, self).configure_env(cfg, env)
-
-        env.DEFINES.update(
-            CONFIG_HAL_BOARD_SUBTYPE = 'HAL_BOARD_SUBTYPE_LINUX_RASPILOT',
-        )
-
 class erlebrain2(linux):
     toolchain = 'arm-linux-gnueabihf'
 
@@ -413,16 +413,6 @@ class dark(linux):
 
         env.DEFINES.update(
             CONFIG_HAL_BOARD_SUBTYPE = 'HAL_BOARD_SUBTYPE_LINUX_DARK',
-        )
-
-class urus(linux):
-    toolchain = 'arm-linux-gnueabihf'
-
-    def configure_env(self, cfg, env):
-        super(urus, self).configure_env(cfg, env)
-
-        env.DEFINES.update(
-            CONFIG_HAL_BOARD_SUBTYPE = 'HAL_BOARD_SUBTYPE_LINUX_URUS',
         )
 
 class pxfmini(linux):
@@ -495,6 +485,7 @@ class px4(Board):
             '-Wlogical-op',
             '-Wframe-larger-than=1300',
             '-fsingle-precision-constant',
+            '-Wno-attributes',
             '-Wno-error=double-promotion',
             '-Wno-error=missing-declarations',
             '-Wno-error=float-equal',

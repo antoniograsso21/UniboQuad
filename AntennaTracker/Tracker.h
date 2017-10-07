@@ -83,6 +83,8 @@ public:
 
     Tracker(void);
 
+    static const AP_FWVersion fwver;
+
     // HAL::Callbacks implementation.
     void setup() override;
     void loop() override;
@@ -91,10 +93,10 @@ private:
     Parameters g;
 
     // main loop scheduler
-    AP_Scheduler scheduler;
- 
+    AP_Scheduler scheduler = AP_Scheduler::create();
+
     // notification object for LEDs, buzzers etc
-    AP_Notify notify;
+    AP_Notify notify = AP_Notify::create();
 
     uint32_t start_time_ms = 0;
 
@@ -102,23 +104,23 @@ private:
 
     DataFlash_Class DataFlash;
 
-    AP_GPS gps;
+    AP_GPS gps = AP_GPS::create();
 
-    AP_Baro barometer;
+    AP_Baro barometer = AP_Baro::create();
 
-    Compass compass;
+    Compass compass = Compass::create();
 
-    AP_InertialSensor ins;
+    AP_InertialSensor ins = AP_InertialSensor::create();
 
-    RangeFinder rng {serial_manager, ROTATION_NONE};
+    RangeFinder rng = RangeFinder::create(serial_manager, ROTATION_NONE);
 
 // Inertial Navigation EKF
 #if AP_AHRS_NAVEKF_AVAILABLE
-    NavEKF2 EKF2{&ahrs, barometer, rng};
-    NavEKF3 EKF3{&ahrs, barometer, rng};
-    AP_AHRS_NavEKF ahrs{ins, barometer, gps, rng, EKF2, EKF3};
+    NavEKF2 EKF2 = NavEKF2::create(&ahrs, barometer, rng);
+    NavEKF3 EKF3 = NavEKF3::create(&ahrs, barometer, rng);
+    AP_AHRS_NavEKF ahrs = AP_AHRS_NavEKF::create(ins, barometer, gps, EKF2, EKF3);
 #else
-    AP_AHRS_DCM ahrs{ins, barometer, gps};
+    AP_AHRS_DCM ahrs = AP_AHRS_DCM::create(ins, barometer, gps);
 #endif
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
@@ -137,15 +139,15 @@ private:
     bool yaw_servo_out_filt_init = false;
     bool pitch_servo_out_filt_init = false;
 
-    AP_SerialManager serial_manager;
+    AP_SerialManager serial_manager = AP_SerialManager::create();
     GCS_Tracker _gcs; // avoid using this; use gcs()
     GCS_Tracker &gcs() { return _gcs; }
 
-    AP_BoardConfig BoardConfig;
+    AP_BoardConfig BoardConfig = AP_BoardConfig::create();
 
 #if HAL_WITH_UAVCAN
     // board specific config for CAN bus
-    AP_BoardConfig_CAN BoardConfig_CAN;
+    AP_BoardConfig_CAN BoardConfig_CAN = AP_BoardConfig_CAN::create();
 #endif
 
     struct Location current_loc;
@@ -237,11 +239,11 @@ private:
     bool get_home_eeprom(struct Location &loc);
     void set_home_eeprom(struct Location temp);
     void set_home(struct Location temp);
+    void set_ekf_origin(const Location& loc);
     void arm_servos();
     void disarm_servos();
     void prepare_servos();
     void set_mode(enum ControlMode mode);
-    bool mavlink_set_mode(uint8_t mode);
     void check_usb_mux(void);
     void update_vehicle_pos_estimate();
     void update_tracker_position();
@@ -265,8 +267,6 @@ public:
     void mavlink_snoop(const mavlink_message_t* msg);
     void mavlink_delay_cb();
 };
-
-#define MENU_FUNC(func) FUNCTOR_BIND(&tracker, &Tracker::func, int8_t, uint8_t, const Menu::arg *)
 
 extern const AP_HAL::HAL& hal;
 extern Tracker tracker;

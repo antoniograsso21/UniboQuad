@@ -40,13 +40,18 @@ class AP_Notify
     friend class RGBLed;            // RGBLed needs access to notify parameters
     friend class Display;           // Display needs access to notify parameters
 public:
-    // Constructor
-    AP_Notify();   
+    static AP_Notify create() { return AP_Notify{}; }
 
     // get singleton instance
     static AP_Notify *instance(void) {
         return _instance;
     }
+
+    constexpr AP_Notify(AP_Notify &&other) = default;
+
+    /* Do not allow copies */
+    AP_Notify(const AP_Notify &other) = delete;
+    AP_Notify &operator=(const AP_Notify&) = delete;
 
     // Oreo LED Themes
     enum Oreo_LED_Theme {
@@ -115,6 +120,9 @@ public:
     // initialisation
     void init(bool enable_external_leds);
 
+    // add all backends
+    void add_backends(void);
+
     /// update - allow updates of leds that cannot be updated during a timed interrupt
     void update(void);
 
@@ -137,6 +145,7 @@ public:
     static const struct AP_Param::GroupInfo var_info[];
 
 private:
+    AP_Notify();
 
     static AP_Notify *_instance;
 
@@ -152,4 +161,5 @@ private:
     char _flight_mode_str[5];
 
     static NotifyDevice* _devices[];
+    static uint8_t _num_devices;
 };

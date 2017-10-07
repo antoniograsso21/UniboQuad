@@ -5,19 +5,22 @@
 class AP_Arming_Copter : public AP_Arming
 {
 public:
-    AP_Arming_Copter(const AP_AHRS_NavEKF &ahrs_ref, const AP_Baro &baro, Compass &compass,
-                     const AP_BattMonitor &battery, const AP_InertialNav_NavEKF &inav,
-                     const AP_InertialSensor &ins) :
-        AP_Arming(ahrs_ref, baro, compass, battery),
-        _inav(inav),
-        _ins(ins),
-        _ahrs_navekf(ahrs_ref)
-        {
+    static AP_Arming_Copter create(const AP_AHRS_NavEKF &ahrs_ref, const AP_Baro &baro, Compass &compass,
+                                   const AP_BattMonitor &battery, const AP_InertialNav_NavEKF &inav,
+                                   const AP_InertialSensor &ins) {
+        return AP_Arming_Copter{ahrs_ref, baro, compass, battery, inav, ins};
     }
+
+    constexpr AP_Arming_Copter(AP_Arming_Copter &&other) = default;
+
+    /* Do not allow copies */
+    AP_Arming_Copter(const AP_Arming_Copter &other) = delete;
+    AP_Arming_Copter &operator=(const AP_Baro&) = delete;
 
     void update(void);
     bool all_checks_passing(bool arming_from_gcs);
-    void pre_arm_rc_checks(bool display_failure);
+
+    bool rc_calibration_checks(bool display_failure);
 
 protected:
 
@@ -39,14 +42,21 @@ protected:
     bool motor_checks(bool display_failure);
     bool pilot_throttle_checks(bool display_failure);
     bool barometer_checks(bool display_failure);
-    bool rc_calibration_checks(bool display_failure);
 
     void set_pre_arm_check(bool b);
-    void set_pre_arm_rc_check(bool b);
 
     enum HomeState home_status() const override;
 
 private:
+    AP_Arming_Copter(const AP_AHRS_NavEKF &ahrs_ref, const AP_Baro &baro, Compass &compass,
+                     const AP_BattMonitor &battery, const AP_InertialNav_NavEKF &inav,
+                     const AP_InertialSensor &ins)
+        : AP_Arming(ahrs_ref, baro, compass, battery)
+        , _inav(inav)
+        , _ins(ins)
+        , _ahrs_navekf(ahrs_ref)
+    {
+    }
 
     const AP_InertialNav_NavEKF &_inav;
     const AP_InertialSensor &_ins;

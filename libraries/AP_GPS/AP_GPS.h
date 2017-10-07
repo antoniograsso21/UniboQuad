@@ -34,6 +34,7 @@
 #define GPS_MAX_RATE_MS 200 // maximum value of rate_ms (i.e. slowest update rate) is 5hz or 200ms
 #define GPS_UNKNOWN_DOP UINT16_MAX // set unknown DOP's to maximum value, which is also correct for MAVLink
 #define GPS_WORST_LAG_SEC 0.22f // worst lag value any GPS driver is expected to return, expressed in seconds
+#define GPS_MAX_DELTA_MS 245 // 200 ms (5Hz) + 45 ms buffer
 
 // the number of GPS leap seconds
 #define GPS_LEAPSECONDS_MILLIS 18000ULL
@@ -46,8 +47,6 @@ class AP_GPS_Backend;
 /// GPS driver main class
 class AP_GPS
 {
-public:
-
     friend class AP_GPS_ERB;
     friend class AP_GPS_GSOF;
     friend class AP_GPS_MAV;
@@ -64,8 +63,14 @@ public:
     friend class AP_GPS_UBLOX;
     friend class AP_GPS_Backend;
 
-    // constructor
-	AP_GPS();
+public:
+    static AP_GPS create() { return AP_GPS{}; }
+
+    constexpr AP_GPS(AP_GPS &&other) = default;
+
+    /* Do not allow copies */
+    AP_GPS(const AP_GPS &other) = delete;
+    AP_GPS &operator=(const AP_GPS&) = delete;
 
     // GPS driver types
     enum GPS_Type {
@@ -301,6 +306,14 @@ public:
         return last_message_time_ms(primary_instance);
     }
 
+    // system time delta between the last two reported positions
+    uint16_t last_message_delta_time_ms(uint8_t instance) const {
+        return timing[instance].delta_time_ms;
+    }
+    uint16_t last_message_delta_time_ms(void) const {
+        return last_message_delta_time_ms(primary_instance);
+    }
+
     // return true if the GPS supports vertical velocity values
     bool have_vertical_velocity(uint8_t instance) const {
         return state[instance].have_vertical_velocity;
@@ -388,6 +401,11 @@ public:
     // indicate which bit in LOG_BITMASK indicates gps logging enabled
     void set_log_gps_bit(uint32_t bit) { _log_gps_bit = bit; }
 
+    // report if the gps is healthy (this is defined as existing, an update at a rate greater than 4Hz,
+    // as well as any driver specific behaviour)
+    bool is_healthy(uint8_t instance) const;
+    bool is_healthy(void) const { return is_healthy(primary_instance); }
+
 protected:
 
     // configuration parameters
@@ -413,6 +431,8 @@ protected:
     uint32_t _log_gps_bit = -1;
 
 private:
+    AP_GPS();
+
     // returns the desired gps update rate in milliseconds
     // this does not provide any guarantee that the GPS is updating at the requested
     // rate it is simply a helper for use in the backends for determining what rate
@@ -425,6 +445,9 @@ private:
 
         // the time we got our last message in system milliseconds
         uint32_t last_message_time_ms;
+
+        // delta time between the last pair of GPS updates in system milliseconds
+        uint16_t delta_time_ms;
     };
     // Note allowance for an additional instance to contain blended data
     GPS_timing timing[GPS_MAX_RECEIVERS+1];

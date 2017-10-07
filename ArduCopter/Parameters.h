@@ -132,7 +132,7 @@ public:
         k_param_optflow,
         k_param_dcmcheck_thresh,        // deprecated - remove
         k_param_log_bitmask,
-        k_param_cli_enabled,
+        k_param_cli_enabled_old,        // deprecated - remove
         k_param_throttle_filt,
         k_param_throttle_behavior,
         k_param_pilot_takeoff_alt, // 64
@@ -380,9 +380,6 @@ public:
     AP_Int16        sysid_this_mav;
     AP_Int16        sysid_my_gcs;
     AP_Int8         telem_delay;
-#if CLI_ENABLED == ENABLED
-    AP_Int8         cli_enabled;
-#endif
 
     AP_Float        throttle_filt;
     AP_Int16        throttle_behavior;
@@ -570,6 +567,9 @@ public:
     
     // control over servo output ranges
     SRV_Channels servo_channels;
+
+    // Safe RTL library
+    AP_SmartRTL smart_rtl;
 };
 
 extern const AP_Param::Info        var_info[];

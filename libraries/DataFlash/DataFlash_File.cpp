@@ -80,7 +80,9 @@ DataFlash_File::DataFlash_File(DataFlash_Class &front,
     _perf_fsync(hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, "DF_fsync")),
     _perf_errors(hal.util->perf_alloc(AP_HAL::Util::PC_COUNT, "DF_errors")),
     _perf_overruns(hal.util->perf_alloc(AP_HAL::Util::PC_COUNT, "DF_overruns"))
-{}
+{
+    df_stats_clear();
+}
 
 
 void DataFlash_File::Init()
@@ -93,6 +95,11 @@ void DataFlash_File::Init()
     semaphore = hal.util->new_semaphore();
     if (semaphore == nullptr) {
         AP_HAL::panic("Failed to create DataFlash_File semaphore");
+        return;
+    }
+    write_fd_semaphore = hal.util->new_semaphore();
+    if (write_fd_semaphore == nullptr) {
+        AP_HAL::panic("Failed to create DataFlash_File write_fd_semaphore");
         return;
     }
 
@@ -174,7 +181,6 @@ bool DataFlash_File::log_exists(const uint16_t lognum) const
 {
     char *filename = _log_file_name(lognum);
     if (filename == nullptr) {
-        // internal_error();
         return false; // ?!
     }
     bool ret = file_exists(filename);
@@ -194,9 +200,13 @@ void DataFlash_File::periodic_1Hz(const uint32_t now)
         // If you try to close the file here then it will almost
         // certainly block.  Since this is the main thread, this is
         // likely to cause a crash.
+
+        // semaphore_write_fd not taken here as if the io thread is
+        // dead it may not release lock...
         _write_fd = -1;
         _initialised = false;
     }
+    df_stats_log();
 }
 
 void DataFlash_File::periodic_fullrate(const uint32_t now)
@@ -223,11 +233,11 @@ bool DataFlash_File::CardInserted(void) const
 int64_t DataFlash_File::disk_space_avail()
 {
 #if !DATAFLASH_FILE_MINIMAL
-    struct statfs stats;
-    if (statfs(_log_directory, &stats) < 0) {
+    struct statfs _stats;
+    if (statfs(_log_directory, &_stats) < 0) {
         return -1;
     }
-    return (((int64_t)stats.f_bavail) * stats.f_bsize);
+    return (((int64_t)_stats.f_bavail) * _stats.f_bsize);
 #else
     // return a fake disk space size
     return 100*1000*1000UL;
@@ -240,11 +250,11 @@ int64_t DataFlash_File::disk_space_avail()
 int64_t DataFlash_File::disk_space()
 {
 #if !DATAFLASH_FILE_MINIMAL
-    struct statfs stats;
-    if (statfs(_log_directory, &stats) < 0) {
+    struct statfs _stats;
+    if (statfs(_log_directory, &_stats) < 0) {
         return -1;
     }
-    return (((int64_t)stats.f_blocks) * stats.f_bsize);
+    return (((int64_t)_stats.f_blocks) * _stats.f_bsize);
 #else
     // return fake disk space size
     return 200*1000*1000UL;
@@ -290,7 +300,7 @@ uint16_t DataFlash_File::find_oldest_log()
     // doing a *lot* of asprintf()s and stat()s
     DIR *d = opendir(_log_directory);
     if (d == nullptr) {
-        // internal_error();
+        internal_error();
         return 0;
     }
 
@@ -353,7 +363,7 @@ void DataFlash_File::Prep_MinSpace()
     do {
         float avail = avail_space_percent();
         if (is_equal(avail, -1.0f)) {
-            // internal_error()
+            internal_error();
             break;
         }
         if (avail >= min_avail_space_percent) {
@@ -361,12 +371,12 @@ void DataFlash_File::Prep_MinSpace()
         }
         if (count++ > MAX_LOG_FILES+10) {
             // *way* too many deletions going on here.  Possible internal error.
-            // internal_error();
+            internal_error();
             break;
         }
         char *filename_to_remove = _log_file_name(log_to_remove);
         if (filename_to_remove == nullptr) {
-            // internal_error();
+            internal_error();
             break;
         }
         if (file_exists(filename_to_remove)) {
@@ -380,7 +390,7 @@ void DataFlash_File::Prep_MinSpace()
                     // sequence of files...  however, there may be still
                     // files out there, so keep going.
                 } else {
-                    // internal_error();
+                    internal_error();
                     break;
                 }
             } else {
@@ -574,6 +584,7 @@ bool DataFlash_File::_WritePrioritisedBlock(const void *pBuffer, uint16_t size, 
     }
 
     _writebuf.write((uint8_t*)pBuffer, size);
+    df_stats_gather(size);
     semaphore->give();
     return true;
 }
@@ -827,10 +838,17 @@ uint16_t DataFlash_File::get_num_logs()
  */
 void DataFlash_File::stop_logging(void)
 {
+    // best-case effort to avoid annoying the IO thread
+    const bool have_sem = write_fd_semaphore->take(1);
     if (_write_fd != -1) {
         int fd = _write_fd;
         _write_fd = -1;
         ::close(fd);
+    }
+    if (have_sem) {
+        write_fd_semaphore->give();
+    } else {
+        _internal_errors++;
     }
 }
 
@@ -881,12 +899,17 @@ uint16_t DataFlash_File::start_new_log(void)
         _open_error = true;
         return 0xFFFF;
     }
+    if (!write_fd_semaphore->take(1)) {
+        _open_error = true;
+        return 0xFFFF;
+    }
     _write_fd = ::open(fname, O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666);
     _cached_oldest_log = 0;
 
     if (_write_fd == -1) {
         _initialised = false;
         _open_error = true;
+        write_fd_semaphore->give();
         int saved_errno = errno;
         ::printf("Log open fail for %s - %s\n",
                  fname, strerror(saved_errno));
@@ -898,6 +921,7 @@ uint16_t DataFlash_File::start_new_log(void)
     free(fname);
     _write_offset = 0;
     _writebuf.clear();
+    write_fd_semaphore->give();
 
     // now update lastlog.txt with the new log number
     fname = _lastlog_file_name();
@@ -1087,8 +1111,13 @@ void DataFlash_File::flush(void)
         _io_timer();
     }
     hal.scheduler->resume_timer_procs();
-    if (_write_fd != -1) {
-        ::fsync(_write_fd);
+    if (write_fd_semaphore->take(1)) {
+        if (_write_fd != -1) {
+            ::fsync(_write_fd);
+        }
+        write_fd_semaphore->give();
+    } else {
+        _internal_errors++;
     }
 }
 #endif
@@ -1145,6 +1174,13 @@ void DataFlash_File::_io_timer(void)
     }
 
     last_io_operation = "write";
+    if (!write_fd_semaphore->take(1)) {
+        return;
+    }
+    if (_write_fd == -1) {
+        write_fd_semaphore->give();
+        return;
+    }
     ssize_t nwritten = ::write(_write_fd, head, nbytes);
     last_io_operation = "";
     if (nwritten <= 0) {
@@ -1169,6 +1205,7 @@ void DataFlash_File::_io_timer(void)
         last_io_operation = "";
 #endif
     }
+    write_fd_semaphore->give();
     hal.util->perf_end(_perf_write);
 }
 
@@ -1191,6 +1228,9 @@ bool DataFlash_File::io_thread_alive() const
 
 bool DataFlash_File::logging_failed() const
 {
+    if (!_initialised) {
+        return true;
+    }
     if (_open_error) {
         return true;
     }
@@ -1213,5 +1253,46 @@ void DataFlash_File::vehicle_was_disarmed()
         stop_logging();
     }
 }
+
+void DataFlash_File::Log_Write_DataFlash_Stats_File(const struct df_stats &_stats)
+{
+    struct log_DSF pkt = {
+        LOG_PACKET_HEADER_INIT(LOG_DF_FILE_STATS),
+        time_us         : AP_HAL::micros64(),
+        dropped         : _dropped,
+        internal_errors : _internal_errors,
+        blocks          : _stats.blocks,
+        bytes           : _stats.bytes,
+        buf_space_min   : _stats.buf_space_min,
+        buf_space_max   : _stats.buf_space_max,
+        buf_space_avg   : (_stats.blocks) ? (_stats.buf_space_sigma / _stats.blocks) : 0,
+
+    };
+    WriteBlock(&pkt, sizeof(pkt));
+}
+
+void DataFlash_File::df_stats_gather(const uint16_t bytes_written) {
+    const uint32_t space_remaining = _writebuf.space();
+    if (space_remaining < stats.buf_space_min) {
+        stats.buf_space_min = space_remaining;
+    }
+    if (space_remaining > stats.buf_space_max) {
+        stats.buf_space_max = space_remaining;
+    }
+    stats.buf_space_sigma += space_remaining;
+    stats.bytes += bytes_written;
+    stats.blocks++;
+}
+
+void DataFlash_File::df_stats_clear() {
+    memset(&stats, '\0', sizeof(stats));
+    stats.buf_space_min = -1;
+}
+
+void DataFlash_File::df_stats_log() {
+    Log_Write_DataFlash_Stats_File(stats);
+    df_stats_clear();
+}
+
 
 #endif // HAL_OS_POSIX_IO

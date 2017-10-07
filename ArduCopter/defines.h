@@ -24,8 +24,6 @@ enum autopilot_yaw_mode {
 // Ch6... Ch12 aux switch control
 #define AUX_SWITCH_PWM_TRIGGER_HIGH 1800   // pwm value above which the ch7 or ch8 option will be invoked
 #define AUX_SWITCH_PWM_TRIGGER_LOW  1200   // pwm value below which the ch7 or ch8 option will be disabled
-#define CH6_PWM_TRIGGER_HIGH    1800
-#define CH6_PWM_TRIGGER_LOW     1200
 
 // values used by the ap.ch7_opt and ap.ch8_opt flags
 #define AUX_SWITCH_LOW              0       // indicates auxiliary switch is in the low position (pwm <1200)
@@ -72,6 +70,8 @@ enum aux_sw_func {
     AUXSW_PRECISION_LOITER =    39,  // enable precision loiter
     AUXSW_AVOID_PROXIMITY =     40,  // enable object avoidance using proximity sensors (ie. horizontal lidar)
     AUXSW_ARMDISARM =           41,  // arm or disarm vehicle
+    AUXSW_SMART_RTL =           42, // change to SmartRTL flight mode
+    AUXSW_INVERTED  =           43,  // enable inverted flight
     AUXSW_SWITCH_MAX,
 };
 
@@ -104,6 +104,7 @@ enum control_mode_t {
     THROW =        18,  // throw to launch mode using inertial/GPS system, no pilot input
     AVOID_ADSB =   19,  // automatic avoidance of obstacles in the macro scale - e.g. full-sized aircraft
     GUIDED_NOGPS = 20,  // guided mode but only accepts attitude and altitude
+    SMART_RTL =    21,  // SMART_RTL returns to home by retracing its steps
 };
 
 enum mode_reason_t {
@@ -124,6 +125,7 @@ enum mode_reason_t {
     MODE_REASON_AVOIDANCE,
     MODE_REASON_AVOIDANCE_RECOVERY,
     MODE_REASON_THROW_COMPLETE,
+    MODE_REASON_TERMINATE,
 };
 
 // Tuning enumeration
@@ -218,6 +220,15 @@ enum RTLState {
     RTL_LoiterAtHome,
     RTL_FinalDescent,
     RTL_Land
+};
+
+// Safe RTL states
+enum SmartRTLState {
+    SmartRTL_WaitForPathCleanup,
+    SmartRTL_PathFollow,
+    SmartRTL_PreLandPosition,
+    SmartRTL_Descend,
+    SmartRTL_Land
 };
 
 // Alt_Hold states
