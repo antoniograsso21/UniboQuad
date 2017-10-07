@@ -101,7 +101,7 @@ AC_Sprayer::update()
         run(false);
         return;
     }
-
+    /*
     // exit immediately if the pump function has not been set-up for any servo
     if (!SRV_Channels::function_assigned(SRV_Channel::k_sprayer_pump)) {
         return;
@@ -166,5 +166,5 @@ AC_Sprayer::update()
         _flags.spraying = true;
     }else{
         stop_spraying();
-    }
+    } */
 }
