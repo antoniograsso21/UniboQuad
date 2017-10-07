@@ -16,9 +16,9 @@ static void move_servo(int channel, int angle_value, int angle_min, int angle_ma
     if(channel < 0 || channel > 13 ) // 14 canali OUT
         return;
     // definisco dei valori di interesse
-    const int rangeIn = angle_max - angle_min; // 180
-    const int rangeOut = output_max - output_min; //900
-    const int deltaIn = angle_value - angle_min; //20
+    const int rangeIn = angle_max - angle_min;
+    const int rangeOut = output_max - output_min;
+    const int deltaIn = angle_value - angle_min;
 
     // definisco costanti matematiche per migliorare l'accuratezza del risultato di divisioni ed approssimazioni
     const int fixedHalfDecimal = 1;
@@ -34,7 +34,7 @@ static void move_servo(int channel, int angle_value, int angle_min, int angle_ma
      * AUX_CH 4 == channels[11]
      */
     // scrivo sul canale desiderato il valore pwm precedentemente calcolato
-    SRV_Channels::srv_channel(channel)->set_output_pwm(pwm_value); //line 397 SRV_Channel.h
+    SRV_Channels::srv_channel(channel)->set_output_pwm(pwm_value);
 }
 
 #ifdef USERHOOK_INIT
@@ -165,6 +165,6 @@ void Copter::userhook_SlowLoop()
 #ifdef USERHOOK_SUPERSLOWLOOP
 void Copter::userhook_SuperSlowLoop()
 {
-    // 1Hz code
+
 }
 #endif
