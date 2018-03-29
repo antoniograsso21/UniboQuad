@@ -13,7 +13,7 @@
 static void move_servo(int channel, int angle_value, int angle_min, int angle_max, int output_min, int output_max)
 {
     // check first parameter
-    if(channel < 0 || channel > 13 ) // 14 canali OUT
+    if(channel < 0 || channel > 13 ) // 14 OUT channels
         return;
     // values of interests
     const int rangeIn = angle_max - angle_min;
@@ -21,7 +21,7 @@ static void move_servo(int channel, int angle_value, int angle_min, int angle_ma
     const int deltaIn = angle_value - angle_min;
 
     const int fixedHalfDecimal = 1;
-    const int fixedDecimal = fixedHalfDecimal * 2; //2
+    const int fixedDecimal = fixedHalfDecimal * 2; 
 
     // pwm value used to move servo
     uint16_t pwm_value = ((deltaIn * rangeOut * fixedDecimal) / (rangeIn) + fixedHalfDecimal) / fixedDecimal + output_min;
@@ -58,9 +58,9 @@ void Copter::userhook_50Hz()
 #endif
 
 #ifdef USERHOOK_MEDIUMLOOP
-#define PI 3.14159265358979323846 // definizione di pi greco
-#define DELTA_TA 0.2 // parametro DELTA_Ta
-#define H_REF 150 // parametro h*, altezza di riferimento
+#define PI 3.14159265358979323846 // pi
+#define DELTA_TA 0.2 // DELTA_Ta parameter
+#define H_REF 150 // h* parameter (benchmark height)
 void Copter::userhook_MediumLoop()
 {
     // attitude heading reference system
