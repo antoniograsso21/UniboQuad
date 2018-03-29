@@ -4,7 +4,7 @@
  * @brief This function allows to move the servo connected to the Pixhawk (reimplementation of Arduino function)
  * @params
  * channel: Pixhawk's channel which the servo is connected to
- * angle_value: angle value of servo rotation
+ * angle_value: angle value which describes servo rotation
  * angle_min: infimum angle value
  * angle_max: supremum angle value
  * output_min: min pulse width
