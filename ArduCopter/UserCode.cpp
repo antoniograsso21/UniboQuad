@@ -23,7 +23,7 @@ static void move_servo(int channel, int angle_value, int angle_min, int angle_ma
     const int fixedHalfDecimal = 1;
     const int fixedDecimal = fixedHalfDecimal * 2; //2
 
-    // calcolo il valore pwm da scrivere sul canale per muovere il servo motore
+    // pwm value used to move servo
     uint16_t pwm_value = ((deltaIn * rangeOut * fixedDecimal) / (rangeIn) + fixedHalfDecimal) / fixedDecimal + output_min;
 
     /*
